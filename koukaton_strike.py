@@ -24,9 +24,10 @@ class Bird(pg.sprite.Sprite):
     """
     ゲームキャラクター（こうかとん）に関するクラス
     """
-    def __init__(self, num: int, xy: tuple[int, int], name: str):
+    def __init__(self, num: int, xy: tuple[int, int], name: str, health):
         super().__init__()
         self.name = name  # 識別用の名前 ("こうかとん1" または "こうかとん2")
+        self.health = health  # 2匹で同じPlayerHealthオブジェクトを共有
         self.base_img = pg.transform.rotozoom(pg.image.load(f"fig/{num}.png"), 0, 1.2)
         self.image = self.base_img
         self.rect = self.image.get_rect()
@@ -91,6 +92,37 @@ class Bird(pg.sprite.Sprite):
         if is_my_turn:
             pg.draw.circle(screen, (255, 255, 0), self.rect.center, self.rect.width // 2 + 5, 2)
 
+    def damage(self, amount: int) -> None:
+        """このこうかとんが受けたダメージを共通HPに反映する。"""
+        self.health.damage(amount)
+
+    def heal(self, amount: int) -> None:
+        """共通HPを回復する。"""
+        self.health.heal(amount)
+
+    def is_dead(self) -> bool:
+        """2匹共通のHPが0かどうかを返す。"""
+        return self.health.is_dead()
+
+
+class PlayerHealth:
+    """2匹のこうかとんで共有するプレイヤーHPを管理するクラス。"""
+    def __init__(self, max_hp: int = 100):
+        self.max_hp = max_hp
+        self.hp = max_hp
+
+    def damage(self, amount: int) -> None:
+        """共通HPを減らし、0未満にならないようにする。"""
+        self.hp = max(0, self.hp - amount)
+
+    def heal(self, amount: int) -> None:
+        """共通HPを回復し、最大HPを超えないようにする。"""
+        self.hp = min(self.max_hp, self.hp + amount)
+
+    def is_dead(self) -> bool:
+        """共通HPが0かどうかを返す。"""
+        return self.hp <= 0
+
 
 class Enemy(pg.sprite.Sprite):
     """
@@ -102,7 +134,7 @@ class Enemy(pg.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.center = xy
         
-        self.max_hp = 5  # こうかとんが2体になったのでHPを少し多めの 5 に変更
+        self.max_hp = 5 
         self.hp = self.max_hp
 
     def update(self, screen: pg.Surface):
@@ -123,30 +155,92 @@ class Enemy(pg.sprite.Sprite):
             pg.draw.rect(screen, (0, 255, 0), (bar_x, bar_y, int(bar_width * hp_ratio), bar_height))
 
 
+def draw_player_hp(screen: pg.Surface, player_health: PlayerHealth, x: int, y: int, font: pg.font.Font) -> None:
+    """画面上部に2匹共通のHPゲージを描画する。"""
+    bar_width = 360
+    bar_height = 22
+    hp_ratio = player_health.hp / player_health.max_hp
+
+    hp_text = font.render(
+        f"こうかとん共通HP {player_health.hp}/{player_health.max_hp}",
+        True,
+        (255, 255, 255),
+    )
+    screen.blit(hp_text, (x, y))
+
+    bar_y = y + 34
+    pg.draw.rect(screen, (70, 70, 70), (x, bar_y, bar_width, bar_height))
+    pg.draw.rect(screen, (220, 40, 40), (x, bar_y, bar_width, bar_height), 2)
+
+    if player_health.hp > 0:
+        current_width = int(bar_width * hp_ratio)
+        if hp_ratio > 0.5:
+            hp_color = (40, 210, 70)
+        elif hp_ratio > 0.2:
+            hp_color = (240, 190, 30)
+        else:
+            hp_color = (230, 50, 50)
+        pg.draw.rect(screen, hp_color, (x, bar_y, current_width, bar_height))
+
+
+
+def draw_result_screen(
+    screen: pg.Surface,
+    result: str,
+    title_font: pg.font.Font,
+    guide_font: pg.font.Font,
+) -> None:
+    """ゲームクリアまたはゲームオーバー画面を描画する。"""
+    overlay = pg.Surface((WIDTH, HEIGHT), pg.SRCALPHA)
+    overlay.fill((0, 0, 0, 180))
+    screen.blit(overlay, (0, 0))
+
+    if result == "clear":
+        title = "GAME CLEAR!"
+        title_color = (255, 230, 70)
+    else:
+        title = "GAME OVER"
+        title_color = (255, 80, 80)
+
+    title_img = title_font.render(title, True, title_color)
+    guide_img = guide_font.render(
+        "Rキー：もう一度遊ぶ　Qキー：終了", True, (255, 255, 255)
+    )
+
+    screen.blit(title_img, title_img.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 45)))
+    screen.blit(guide_img, guide_img.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 35)))
+
 def main():
     pg.display.set_caption("こうかとんストライク（2人交互ターン制）")
     screen = pg.display.set_mode((WIDTH, HEIGHT))
     bg_img = pg.image.load(f"fig/senjou.png")
     font = pg.font.SysFont("hgp創英角ﾎﾟｯﾌﾟ体", 30)  # ターン表示用のフォント
+    hp_font = pg.font.SysFont("hgp創英角ﾎﾟｯﾌﾟ体", 22)  # HP表示用のフォント
+    result_font = pg.font.SysFont("hgp創英角ﾎﾟｯﾌﾟ体", 72)
+    guide_font = pg.font.SysFont("hgp創英角ﾎﾟｯﾌﾟ体", 28)
 
     # BGMの設定と再生
     pg.mixer.music.load("bgm.mp3")            
     pg.mixer.music.play(loops=-1)            
 
-    # --- 変更点: こうかとんを2体作成してリストで管理 ---
+    # 2匹のこうかとんで共有するHPを先に1つだけ作成
+    player_health = PlayerHealth(max_hp=100)
+
+    # 2匹とも同じplayer_healthを受け取るため、HPは共通
     birds = [
-        Bird(3, (WIDTH // 4, HEIGHT // 3), "プレイヤー1"),   # 上側に配置
-        Bird(1, (WIDTH // 4, HEIGHT * 2 // 3), "プレイヤー2") # 下側に配置（別の画像番号1に設定）
+        Bird(3, (WIDTH // 4, HEIGHT // 3), "プレイヤー1", player_health),
+        Bird(1, (WIDTH // 4, HEIGHT * 2 // 3), "プレイヤー2", player_health),
     ]
     turn_idx = 0  # 現在のターン（0: プレイヤー1, 1: プレイヤー2）
     
     # 敵をグループで管理
     enemies = pg.sprite.Group()
-    enemy = Enemy((WIDTH * 3 // 4, HEIGHT // 4))
-    enemies.add(enemy)
+    boss = Enemy((WIDTH * 3 // 4, HEIGHT // 4))
+    enemies.add(boss)
 
     clock = pg.time.Clock()
-    
+    game_result = None  # None: プレイ中, "clear": クリア, "over": ゲームオーバー
+
     while True:
         current_bird = birds[turn_idx]  # 現在のターンのこうかとん
         
@@ -154,7 +248,24 @@ def main():
             if event.type == pg.QUIT:
                 pg.mixer.music.stop()
                 return 0
+
+            # 終了画面では、再スタートまたは終了だけを受け付ける
+            if game_result is not None:
+                if event.type == pg.KEYDOWN:
+                    if event.key == pg.K_r:
+                        return main()
+                    if event.key in (pg.K_q, pg.K_ESCAPE):
+                        pg.mixer.music.stop()
+                        return 0
+                continue
             
+            # ダメージ処理の動作確認用キー
+            # F1: PlayerHealthへ直接10ダメージ
+            if event.type == pg.KEYDOWN:
+                if event.key == pg.K_F1:
+                    player_health.damage(10)
+                
+
             # 現在のターンのこうかとんだけが操作を受け付ける
             if event.type == pg.MOUSEBUTTONDOWN:
                 if event.button == 1:
@@ -179,38 +290,69 @@ def main():
                     current_bird.vx = -dx * 0.25
                     current_bird.vy = -dy * 0.25
 
-        # --- ターン切り替えロジック ---
-        # 動かしたこうかとんが発射済み、かつ完全に静止したらターンを交代
-        if current_bird.has_shot and current_bird.vx == 0.0 and current_bird.vy == 0.0:
-            current_bird.has_shot = False  # フラグをリセット
-            turn_idx = (turn_idx + 1) % len(birds)  # 0と1を交互に切り替え
+        if game_result is None:
+            # --- ターン切り替えロジック ---
+            # 動かしたこうかとんが発射済み、かつ完全に静止したらターンを交代
+            if current_bird.has_shot and current_bird.vx == 0.0 and current_bird.vy == 0.0:
+                current_bird.has_shot = False  # フラグをリセット
+                turn_idx = (turn_idx + 1) % len(birds)  # 0と1を交互に切り替え
 
-        # 衝突判定の処理（2体とも敵とぶつかる可能性があるためループで処理）
-        for bird in birds:
-            for en in enemies:
-                if bird.rect.colliderect(en.rect):
-                    en.hp -= 1
-                    
-                    if math.hypot(bird.vx, bird.vy) > 0.5:
-                        bird.vx *= -0.5
-                        bird.vy *= -0.5
-                    
-                    if en.hp <= 0:
-                        en.kill()
+            # 衝突判定の処理（2体とも敵とぶつかる可能性があるためループで処理）
+            for bird in birds:
+                for en in enemies:
+                    if bird.rect.colliderect(en.rect):
+                        en.hp -= 1
+
+                        if math.hypot(bird.vx, bird.vy) > 0.5:
+                            bird.vx *= -0.5
+                            bird.vy *= -0.5
+
+                        if en.hp <= 0:
+                            en.kill()
+
+            # ゲーム終了判定。両方成立した場合はゲームオーバーを優先する。
+            if player_health.is_dead():
+                game_result = "over"
+                for bird in birds:
+                    bird.vx = bird.vy = 0.0
+                    bird.is_dragging = False
+                pg.mixer.music.stop()
+            elif boss.hp <= 0:
+                game_result = "clear"
+                for bird in birds:
+                    bird.vx = bird.vy = 0.0
+                    bird.is_dragging = False
+                pg.mixer.music.stop()
 
         # 描画処理
         screen.blit(bg_img, [0, 0])
         
         # こうかとんの更新と描画（引数に自分のターンかどうかの真偽値を渡す）
         for i, bird in enumerate(birds):
-            bird.update(screen, is_my_turn=(i == turn_idx))
-            
+            if game_result is None:
+                bird.update(screen, is_my_turn=(i == turn_idx))
+            else:
+                screen.blit(bird.image, bird.rect)
+
         enemies.update(screen)
         
+        # 2匹共通のHPゲージを表示
+        draw_player_hp(screen, player_health, 20, 70, hp_font)
+
         # 画面上部に現在のターンを表示
-        turn_text = font.render(f"現在のターン: {birds[turn_idx].name}", True, (255, 255, 255))
-        screen.blit(turn_text, (20, 20))
-        
+        if game_result is None:
+            turn_text = font.render(f"現在のターン: {birds[turn_idx].name}", True, (255, 255, 255))
+            screen.blit(turn_text, (20, 20))
+
+            test_text = hp_font.render(
+                "F1: 共通HPへ直接-10",
+                True,
+                (255, 255, 255),
+            )
+            screen.blit(test_text, (20, 135))
+        else:
+            draw_result_screen(screen, game_result, result_font, guide_font)
+
         pg.display.update()
         clock.tick(50)
 
