@@ -1,5 +1,6 @@
 import math
 import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import sys
 import pygame as pg
 
@@ -13,7 +14,7 @@ BOSS_TIME = 35_000  # ボスの制限時間[ms]
 WATER_BALL_SPEED = 5  # 水の球の速度
 WATER_DAMAGE = 1  # 水の球に当たった時のダメージ
 
-PLAYER_MAX_HP = 100  # こうかとんのHP
+PLAYER_MAX_HP = 20  # こうかとんのHP
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
